@@ -3,6 +3,10 @@ name: hostapd
 on:
   push:
     branches: [main]
+    # Тег публикует release: intake в marvin-components забирает артефакт
+    # именно оттуда, а не из artifacts прогона — те живут ограниченный срок
+    # и не скачиваются между репозиториями без токена.
+    tags: ["hostapd-v*"]
     paths:
       - hostapd/**
       - scripts/**
@@ -24,7 +28,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write # публикация release по тегу
   packages: read
 
 jobs:
@@ -95,3 +99,13 @@ jobs:
             out/hostapd
             out/hostapd.sha256
             out/build-info.yaml
+
+      - name: Публикация release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            out/hostapd out/hostapd.sha256 out/build-info.yaml \
+            --title "hostapd ${GITHUB_REF_NAME}" \
+            --notes "Статический aarch64-бинарник. Состав и контрольные суммы — в build-info.yaml."
