@@ -3,9 +3,10 @@ name: hostapd
 on:
   push:
     branches: [main]
-    # Тег публикует release: intake в marvin-components забирает артефакт
-    # именно оттуда, а не из artifacts прогона — те живут ограниченный срок
-    # и не скачиваются между репозиториями без токена.
+    # A tag publishes a release: the intake in marvin-components pulls the
+    # artifact from there, not from the run artifacts — those expire after a
+    # limited retention period and cannot be downloaded across repositories
+    # without a token.
     tags: ["hostapd-v*"]
     paths:
       - hostapd/**
@@ -19,16 +20,16 @@ on:
       - container.digest
   workflow_dispatch:
 
-# Коммит с обновлённым container.digest делает workflow "container" под
-# GITHUB_TOKEN, а такие пуши не запускают другие workflow. После бампа digest
-# сборку запускать вручную: gh workflow run hostapd.yml
+# The commit that updates container.digest is made by the "container" workflow
+# using GITHUB_TOKEN, and such pushes do not trigger other workflows. After a
+# digest bump, start the build manually: gh workflow run hostapd.yml
 
 concurrency:
   group: hostapd-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: write # публикация release по тегу
+  contents: write # publishing a release on a tag
   packages: read
 
 jobs:
@@ -37,8 +38,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Артефактный слой кеша: ключ считается от ВСЕХ входов сборки. Совпал —
-      # собирать нечего, артефакт берётся готовым (ADR-0020).
+      # Artifact cache layer: the key is derived from ALL build inputs. On a
+      # hit there is nothing to build, the artifact is reused as is (ADR-0020).
       - id: inputs
         run: |
           key=$(cat Dockerfile container.digest hostapd/* scripts/* 2>/dev/null |
@@ -51,7 +52,7 @@ jobs:
           path: out
           key: hostapd-artifact-${{ steps.inputs.outputs.key }}
 
-      # Загрузки неизменяемы: тарболл с той же контрольной суммой не меняется.
+      # Downloads are immutable: a tarball with the same checksum never changes.
       - if: steps.artifact.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
@@ -59,8 +60,8 @@ jobs:
           key: hostapd-src-${{ hashFiles('hostapd/*.sha256') }}
           restore-keys: hostapd-src-
 
-      # Кеш компилятора. Ограничен по смыслу: он не должен вытеснять
-      # артефактный слой, который экономит больше.
+      # Compiler cache. Deliberately kept narrow: it must not evict the
+      # artifact layer, which saves far more.
       - if: steps.artifact.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
@@ -75,7 +76,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Сборка
+      - name: Build
         if: steps.artifact.outputs.cache-hit != 'true'
         run: |
           image=$(cat container.digest)
@@ -85,9 +86,9 @@ jobs:
             -e BUILD_CONTAINER_DIGEST="$image" \
             "$image" bash scripts/build-hostapd.sh
 
-      # Проверка выполняется всегда, в том числе при попадании в кеш: кеш
-      # ускоряет, но ничего не доказывает (ADR-0020).
-      - name: Проверка артефакта
+      # Verification always runs, including on a cache hit: the cache makes
+      # things faster but proves nothing (ADR-0020).
+      - name: Verify artifact
         run: |
           scripts/verify-artifact.sh out/hostapd aarch64
           cd out && sha256sum -c hostapd.sha256
@@ -100,7 +101,7 @@ jobs:
             out/hostapd.sha256
             out/build-info.yaml
 
-      - name: Публикация release
+      - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -108,4 +109,4 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             out/hostapd out/hostapd.sha256 out/build-info.yaml \
             --title "hostapd ${GITHUB_REF_NAME}" \
-            --notes "Статический aarch64-бинарник. Состав и контрольные суммы — в build-info.yaml."
+            --notes "Static aarch64 binary. Contents and checksums are in build-info.yaml."

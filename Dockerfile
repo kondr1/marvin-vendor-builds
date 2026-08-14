@@ -1,13 +1,13 @@
-# Контейнер сборки vendor-компонентов Marvin.
+# Build container for Marvin vendor components.
 #
-# Подход: кросс-компиляция под aarch64-musl без эмуляции.
-#   - zig выступает кросс-компилятором: несёт с собой musl и compiler-rt,
-#     поэтому не нужен внешний cross-toolchain и его сборка;
-#   - статические библиотеки (OpenSSL, libnl) не собираются нами, а берутся
-#     готовыми из aarch64-репозиториев Alpine — они уже собраны под musl.
+# Approach: cross-compile for aarch64-musl without emulation.
+#   - zig acts as the cross-compiler: it ships musl and compiler-rt with it,
+#     so no external cross-toolchain has to be obtained or built;
+#   - static libraries (OpenSSL, libnl) are not built by us, they are taken
+#     prebuilt from the Alpine aarch64 repositories, already built against musl.
 #
-# Образ потребляется ПО DIGEST (см. container.digest), а не по тегу: точный
-# набор версий пакетов внутри фиксируется именно digest'ом.
+# The image is consumed BY DIGEST (see container.digest), not by tag: the exact
+# set of package versions inside is pinned by the digest and nothing else.
 FROM alpine:3.22
 
 RUN apk add --no-cache \
@@ -15,7 +15,7 @@ RUN apk add --no-cache \
 	bash make curl tar xz gnupg binutils file coreutils \
 	pkgconf
 
-# Sysroot aarch64: только заголовки и статические библиотеки.
+# aarch64 sysroot: headers and static libraries only.
 ARG ALPINE_BRANCH=v3.22
 ARG SYSROOT=/sysroot
 RUN apk add --no-cache --arch aarch64 --allow-untrusted \

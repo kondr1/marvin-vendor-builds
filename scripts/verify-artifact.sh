@@ -1,25 +1,25 @@
 #!/usr/bin/env sh
-# Проверка собранного бинарника перед публикацией.
+# Check a built binary before publishing it.
 #
-# Артефакт обязан быть статическим и под целевой архитектурой: на gokrazy нет
-# C-runtime и динамического загрузчика, поэтому динамически слинкованный
-# бинарник там просто не запустится.
+# The artifact must be static and built for the target architecture: gokrazy has
+# no C runtime and no dynamic loader, so a dynamically linked binary simply will
+# not start there.
 #
-# Использование: verify-artifact.sh <файл> <ожидаемая-архитектура>
+# Usage: verify-artifact.sh <file> <expected-arch>
 #   verify-artifact.sh out/hostapd aarch64
 set -eu
 
-file_path=${1:?нужен путь к артефакту}
-want_arch=${2:?нужна ожидаемая архитектура, напр. aarch64}
+file_path=${1:?artifact path required}
+want_arch=${2:?expected architecture required, e.g. aarch64}
 
 fail() {
-	echo "ОШИБКА: $1" >&2
+	echo "ERROR: $1" >&2
 	exit 1
 }
 
-[ -f "$file_path" ] || fail "файл не найден: $file_path"
+[ -f "$file_path" ] || fail "file not found: $file_path"
 
-header=$(readelf -h "$file_path" 2>/dev/null) || fail "не ELF: $file_path"
+header=$(readelf -h "$file_path" 2>/dev/null) || fail "not an ELF: $file_path"
 
 case "$header" in
 *"AArch64"*) got_arch=aarch64 ;;
@@ -29,19 +29,19 @@ case "$header" in
 esac
 
 [ "$got_arch" = "$want_arch" ] ||
-	fail "архитектура $got_arch, ожидалась $want_arch"
+	fail "architecture is $got_arch, expected $want_arch"
 
-# Наличие PT_INTERP означает динамический загрузчик — на gokrazy его нет.
+# A PT_INTERP entry means a dynamic loader is required — gokrazy has none.
 if readelf -l "$file_path" 2>/dev/null | grep -q "INTERP"; then
-	fail "бинарник требует динамический загрузчик (PT_INTERP)"
+	fail "binary requires a dynamic loader (PT_INTERP)"
 fi
 
-# NEEDED-записи означают зависимость от shared-библиотек.
+# NEEDED entries mean the binary depends on shared libraries.
 if readelf -d "$file_path" 2>/dev/null | grep -q "(NEEDED)"; then
-	fail "бинарник зависит от shared-библиотек"
+	fail "binary depends on shared libraries"
 fi
 
 size=$(wc -c < "$file_path")
-[ "$size" -gt 100000 ] || fail "подозрительно маленький артефакт: $size байт"
+[ "$size" -gt 100000 ] || fail "suspiciously small artifact: $size bytes"
 
-echo "ok: $file_path — статический $got_arch, $size байт"
+echo "ok: $file_path — static $got_arch, $size bytes"
