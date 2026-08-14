@@ -1,0 +1,97 @@
+name: hostapd
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - hostapd/**
+      - scripts/**
+      - container.digest
+      - .github/workflows/hostapd.yml
+  pull_request:
+    paths:
+      - hostapd/**
+      - scripts/**
+      - container.digest
+  workflow_dispatch:
+
+# Коммит с обновлённым container.digest делает workflow "container" под
+# GITHUB_TOKEN, а такие пуши не запускают другие workflow. После бампа digest
+# сборку запускать вручную: gh workflow run hostapd.yml
+
+concurrency:
+  group: hostapd-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Артефактный слой кеша: ключ считается от ВСЕХ входов сборки. Совпал —
+      # собирать нечего, артефакт берётся готовым (ADR-0020).
+      - id: inputs
+        run: |
+          key=$(cat Dockerfile container.digest hostapd/* scripts/* 2>/dev/null |
+                sha256sum | cut -c1-16)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - id: artifact
+        uses: actions/cache@v4
+        with:
+          path: out
+          key: hostapd-artifact-${{ steps.inputs.outputs.key }}
+
+      # Загрузки неизменяемы: тарболл с той же контрольной суммой не меняется.
+      - if: steps.artifact.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: downloads
+          key: hostapd-src-${{ hashFiles('hostapd/*.sha256') }}
+          restore-keys: hostapd-src-
+
+      # Кеш компилятора. Ограничен по смыслу: он не должен вытеснять
+      # артефактный слой, который экономит больше.
+      - if: steps.artifact.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/zig
+          key: zig-${{ hashFiles('container.digest') }}-${{ steps.inputs.outputs.key }}
+          restore-keys: zig-${{ hashFiles('container.digest') }}-
+
+      - if: steps.artifact.outputs.cache-hit != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Сборка
+        if: steps.artifact.outputs.cache-hit != 'true'
+        run: |
+          image=$(cat container.digest)
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            -v "$HOME/.cache/zig:/root/.cache/zig" \
+            -e BUILD_CONTAINER_DIGEST="$image" \
+            "$image" bash scripts/build-hostapd.sh
+
+      # Проверка выполняется всегда, в том числе при попадании в кеш: кеш
+      # ускоряет, но ничего не доказывает (ADR-0020).
+      - name: Проверка артефакта
+        run: |
+          scripts/verify-artifact.sh out/hostapd aarch64
+          cd out && sha256sum -c hostapd.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hostapd-aarch64-static
+          path: |
+            out/hostapd
+            out/hostapd.sha256
+            out/build-info.yaml

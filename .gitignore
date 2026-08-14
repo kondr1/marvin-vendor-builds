@@ -1,0 +1,7 @@
+/build/
+/downloads/
+/src/
+/out/
+*.tar.gz
+*.tar.xz
+*.asc
