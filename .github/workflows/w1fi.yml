@@ -1,4 +1,8 @@
-name: hostapd
+name: w1fi
+
+# hostapd and wpa_supplicant are built by one workflow over a matrix: they come
+# from the same project and the same release, and splitting them would mean two
+# copies of the same cache and verification logic drifting apart.
 
 on:
   push:
@@ -7,25 +11,27 @@ on:
     # artifact from there, not from the run artifacts — those expire after a
     # limited retention period and cannot be downloaded across repositories
     # without a token.
-    tags: ["hostapd-v*"]
+    tags: ["hostapd-v*", "wpa_supplicant-v*", "w1fi-v*"]
     paths:
       - hostapd/**
+      - wpa_supplicant/**
       - scripts/**
       - container.digest
-      - .github/workflows/hostapd.yml
+      - .github/workflows/w1fi.yml
   pull_request:
     paths:
       - hostapd/**
+      - wpa_supplicant/**
       - scripts/**
       - container.digest
   workflow_dispatch:
 
 # The commit that updates container.digest is made by the "container" workflow
 # using GITHUB_TOKEN, and such pushes do not trigger other workflows. After a
-# digest bump, start the build manually: gh workflow run hostapd.yml
+# digest bump, start the build manually: gh workflow run w1fi.yml
 
 concurrency:
-  group: hostapd-${{ github.ref }}
+  group: w1fi-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -35,6 +41,11 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      # One failing component must not hide the state of the other.
+      fail-fast: false
+      matrix:
+        component: [hostapd, wpa_supplicant]
     steps:
       - uses: actions/checkout@v4
 
@@ -42,7 +53,8 @@ jobs:
       # hit there is nothing to build, the artifact is reused as is (ADR-0020).
       - id: inputs
         run: |
-          key=$(cat Dockerfile container.digest hostapd/* scripts/* 2>/dev/null |
+          key=$(cat Dockerfile container.digest \
+                ${{ matrix.component }}/* scripts/* 2>/dev/null |
                 sha256sum | cut -c1-16)
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
@@ -50,15 +62,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: out
-          key: hostapd-artifact-${{ steps.inputs.outputs.key }}
+          key: ${{ matrix.component }}-artifact-${{ steps.inputs.outputs.key }}
 
       # Downloads are immutable: a tarball with the same checksum never changes.
       - if: steps.artifact.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: downloads
-          key: hostapd-src-${{ hashFiles('hostapd/*.sha256') }}
-          restore-keys: hostapd-src-
+          key: w1fi-src-${{ hashFiles('hostapd/*.sha256', 'wpa_supplicant/*.sha256') }}
+          restore-keys: w1fi-src-
 
       # Compiler cache. Deliberately kept narrow: it must not evict the
       # artifact layer, which saves far more.
@@ -84,29 +96,36 @@ jobs:
             -v "$PWD:/work" -w /work \
             -v "$HOME/.cache/zig:/root/.cache/zig" \
             -e BUILD_CONTAINER_DIGEST="$image" \
-            "$image" bash scripts/build-hostapd.sh
+            "$image" bash scripts/build-w1fi.sh ${{ matrix.component }}
 
       # Verification always runs, including on a cache hit: the cache makes
       # things faster but proves nothing (ADR-0020).
       - name: Verify artifact
         run: |
-          scripts/verify-artifact.sh out/hostapd aarch64
-          cd out && sha256sum -c hostapd.sha256
+          scripts/verify-artifact.sh out/${{ matrix.component }} aarch64
+          cd out && sha256sum -c ${{ matrix.component }}.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hostapd-aarch64-static
+          name: ${{ matrix.component }}-aarch64-static
           path: |
-            out/hostapd
-            out/hostapd.sha256
-            out/build-info.yaml
+            out/${{ matrix.component }}
+            out/${{ matrix.component }}.sha256
+            out/${{ matrix.component }}-build-info.yaml
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            out/${{ matrix.component }} \
+            out/${{ matrix.component }}.sha256 \
+            out/${{ matrix.component }}-build-info.yaml \
+            --clobber ||
           gh release create "${GITHUB_REF_NAME}" \
-            out/hostapd out/hostapd.sha256 out/build-info.yaml \
-            --title "hostapd ${GITHUB_REF_NAME}" \
-            --notes "Static aarch64 binary. Contents and checksums are in build-info.yaml."
+            out/${{ matrix.component }} \
+            out/${{ matrix.component }}.sha256 \
+            out/${{ matrix.component }}-build-info.yaml \
+            --title "w1.fi ${GITHUB_REF_NAME}" \
+            --notes "Static aarch64 binaries. Contents and checksums are in build-info.yaml."
